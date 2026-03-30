@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  traefik:
+  ingress:
     image: traefik:v2.11
-    container_name: bringup-traefik
+    container_name: bringup-ingress
     restart: always
     command:
       - "--ping=true"
