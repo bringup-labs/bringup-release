@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: traefik:v2.11
+    container_name: bringup-traefik
+    restart: always
+    command:
+      - "--ping=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/traefik/tls.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./configs/traefik/tls.yml:/traefik/tls.yml:ro
+      - ./configs/certs:/certs:ro
+    networks:
+      - bagmaster_net
+
+
+networks:
+  bagmaster_net:
+    name: bagmaster_net
+    driver: bridge
+    attachable: true
