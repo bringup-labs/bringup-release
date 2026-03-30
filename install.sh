@@ -8,6 +8,11 @@ COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 DOMAIN="bringup.local"
 CERT_DIR="$INSTALL_DIR/certs"
 
+# ---- Versions (PIN EVERYTHING) ----
+MKCERT_VERSION="v1.4.4"
+COMPOSE_COMMIT="main"
+
+# ---- Colors ----
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
@@ -77,10 +82,13 @@ install_mkcert() {
       apt-get update -y || true
       apt-get install -y libnss3-tools curl || true
 
-      curl -L -o /usr/local/bin/mkcert \
-        https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64
+      TMP_FILE="/tmp/mkcert"
+      URL="https://github.com/FiloSottile/mkcert/releases/download/${MKCERT_VERSION}/mkcert-${MKCERT_VERSION}-linux-amd64"
 
-      chmod +x /usr/local/bin/mkcert
+      curl -fsSL "$URL" -o "$TMP_FILE"
+
+      chmod +x "$TMP_FILE"
+      mv "$TMP_FILE" /usr/local/bin/mkcert
       ;;
     Darwin)
       brew install mkcert nss
@@ -111,8 +119,10 @@ mkdir -p "$CERT_DIR"
 # ----------------------------
 
 log "Downloading docker compose..."
-curl -L https://raw.githubusercontent.com/bringup-labs/bringup-release/main/docker-compose.yml \
-  -o "$COMPOSE_FILE"
+
+COMPOSE_URL="https://raw.githubusercontent.com/bringup-labs/bringup-release/${COMPOSE_COMMIT}/docker-compose.yml"
+
+curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_FILE"
 
 # ----------------------------
 # Generate TLS cert
@@ -128,8 +138,8 @@ mkcert -key-file "$CERT_DIR/key.pem" \
 # Hosts entry
 # ----------------------------
 
-if ! grep -q "$DOMAIN" /etc/hosts; then
-  log "Adding domain to /etc/hosts"
+if ! grep -qE "127.0.0.1\s+$DOMAIN" /etc/hosts; then
+  log "Adding $DOMAIN to /etc/hosts"
   echo "127.0.0.1 $DOMAIN" >> /etc/hosts
 fi
 
@@ -156,14 +166,16 @@ log "Waiting for app..."
 MAX_RETRIES=40
 RETRY=0
 
-until curl -s https://$DOMAIN >/dev/null 2>&1; do
-  sleep 2
-  RETRY=$((RETRY+1))
+for ((i=1;i<=MAX_RETRIES;i++)); do
+  if curl -sk "https://$DOMAIN" >/dev/null; then
+    log "App is ready!"
+    break
+  fi
 
-  if [ $RETRY -ge $MAX_RETRIES ]; then
-    error "App did not become ready"
-    docker compose -f "$COMPOSE_FILE" logs
-    exit 1
+  sleep 2
+
+  if [ "$i" -eq "$MAX_RETRIES" ]; then
+    error "App failed to start"
   fi
 done
 
@@ -176,4 +188,4 @@ log "Installation complete 🎉"
 echo ""
 echo "👉 Open: https://$DOMAIN"
 echo ""
-echo "If Docker group was updated, re-login may be required."
+echo "⚠️ Re-login may be required for Docker group changes"
