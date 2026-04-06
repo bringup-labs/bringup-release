@@ -36,7 +36,6 @@ x-postgres-base: &postgres-base
 
 services:
 
-  # ── Ingress (Traefik) ────────────────────────────────────────
   ingress:
     image: traefik:v2.11
     restart: always
@@ -66,7 +65,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Frontend (Next.js) ───────────────────────────────────────
   frontend:
     image: ghcr.io/bringup-labs/bringup-ui:latest
     volumes:
@@ -92,7 +90,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── API Gateway (Kong) ──────────────────────────────────────
   api_gateway:
     image: ghcr.io/bringup-labs/bringup-gateway
     environment:
@@ -109,7 +106,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Transpiler Service ──────────────────────────────────────
   transpiler_service:
     image: ghcr.io/bringup-labs/bringup-transpiler
     environment:
@@ -127,7 +123,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Flow Service ────────────────────────────────────────────
   flow_service:
     image: ghcr.io/bringup-labs/bringup-flow
     environment:
@@ -156,7 +151,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── Action Service ──────────────────────────────────────────
   action_service:
     image: ghcr.io/bringup-labs/bringup-action
     user: "0:0"
@@ -207,7 +201,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── Auth Service ────────────────────────────────────────────
   auth_service:
     image: ghcr.io/bringup-labs/bringup-auth
     environment:
@@ -235,7 +228,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── Experiment Service ──────────────────────────────────────
   experiment_service:
     image: ghcr.io/bringup-labs/bringup-experiment
     environment:
@@ -262,7 +254,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── Rosbag Service ──────────────────────────────────────────
   rosbag_service:
     image: ghcr.io/bringup-labs/bringup-rosbag
     restart: unless-stopped
@@ -290,7 +281,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── Storage Service ─────────────────────────────────────────
   storage_service:
     image: ghcr.io/bringup-labs/bringup-storage
     environment:
@@ -330,7 +320,6 @@ services:
     healthcheck:
       <<: *healthcheck-postgres
 
-  # ── MinIO (S3-compatible object store) ──────────────────────
   minio:
     image: pgsty/minio:RELEASE.2026-03-25T00-00-00Z
     command: server /data --console-address ":9001"
@@ -380,7 +369,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Pipeline Engine (Jenkins) ───────────────────────────────
   bringup-engine:
     image: ghcr.io/bringup-labs/pipeline-engine
     user: "0:0"
@@ -404,7 +392,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Identity Provider (Keycloak) ────────────────────────────
   idp:
     image: ghcr.io/bringup-labs/bringup-idp
     environment:
@@ -417,7 +404,6 @@ services:
     networks:
       - bagmaster_net
 
-  # ── Visualizer ──────────────────────────────────────────────
   visualizer:
     image: ghcr.io/bringup-labs/visualizer
     environment:
