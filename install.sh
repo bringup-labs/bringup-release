@@ -118,7 +118,20 @@ if ! command -v mkcert >/dev/null 2>&1; then
 fi
 
 log "Setting up mkcert CA..."
+# Identify the regular user's CA Root to ensure consistency across root and user calls.
+export CAROOT=$(sudo -u "$USER_NAME" mkcert -CAROOT 2>/dev/null || echo "$USER_HOME/.local/share/mkcert")
+mkdir -p "$CAROOT"
+chown -R "$USER_NAME:$USER_NAME" "$CAROOT" 2>/dev/null || true
+
+# 1. Update system trust store (as root)
 mkcert -install
+
+# 2. Update browser trust stores (as regular user)
+# This resolves the "no Firefox/Chrome security databases found" error when running as root.
+if [ "$EUID" -eq 0 ] && [ "$USER_NAME" != "root" ]; then
+    log "Updating browser trust stores for $USER_NAME..."
+    sudo -u "$USER_NAME" CAROOT="$CAROOT" mkcert -install || true
+fi
 
 # ----------------------------
 # Prepare directories
@@ -160,7 +173,7 @@ mkcert -key-file "$CERT_DIR/key.pem" \
        "::1"
 
 # Copy mkcert root CA so containers (e.g. Next.js) can trust it
-cp "$(mkcert -CAROOT)/rootCA.pem" "$CERT_DIR/rootCA.pem"
+cp "$CAROOT/rootCA.pem" "$CERT_DIR/rootCA.pem"
 
 # Generate Traefik TLS config alongside certs
 log "Generating tls.yml..."
