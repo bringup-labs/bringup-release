@@ -132,7 +132,15 @@ log "Generating TLS cert via mkcert..."
 
 mkcert -key-file "$CERT_DIR/key.pem" \
        -cert-file "$CERT_DIR/cert.pem" \
-       "$DOMAIN" localhost 127.0.0.1
+       "*.${DOMAIN}" \
+       "${DOMAIN}" \
+       "localhost" \
+       "127.0.0.1" \
+       "::1"
+
+# Copy mkcert root CA so containers (e.g. Next.js) can trust it
+cp "$(mkcert -CAROOT)/rootCA.pem" "$CERT_DIR/rootCA.pem"
+
 
 # ----------------------------
 # Hosts entry
