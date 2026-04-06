@@ -69,7 +69,7 @@ services:
     image: ghcr.io/bringup-labs/bringup-ui:latest
     volumes:
       - *ca-volume
-      - ./README.md:/data/license/license.json
+      - license_data:/data/license:ro
     extra_hosts:
       - "idp.${DOMAIN:-bringup.localhost}:host-gateway"
       - "api.${DOMAIN:-bringup.localhost}:host-gateway"
@@ -114,6 +114,7 @@ services:
       DEFAULT_DOCKER_NETWORK: bagmaster_net
     volumes:
       - *ca-volume
+      - license_data:/etc/bringup:ro
     healthcheck:
       <<: *healthcheck-go
       interval: 30s
@@ -130,6 +131,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@flow_db:5432/bagmaster_flows?sslmode=disable
     volumes:
       - *ca-volume
+      - license_data:/etc/bringup:ro
     healthcheck:
       <<: *healthcheck-go
       interval: 30s
@@ -175,6 +177,7 @@ services:
       PROXY_HOST_ADDRESS: host.docker.internal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - license_data:/etc/bringup:ro
       - *ca-volume
     healthcheck:
       <<: *healthcheck-go
@@ -211,6 +214,9 @@ services:
       ROSBAG_SERVICE_BOOTSTRAP_URL: http://api_gateway:8000/rosbags/bootstrap/starter
     healthcheck:
       <<: *healthcheck-go
+    volumes:
+      - license_data:/etc/bringup:ro
+      - *ca-volume
     depends_on:
       auth_db:
         condition: service_healthy
@@ -235,6 +241,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@experiment_db:5432/bagmaster_experiment?sslmode=disable
     volumes:
       - *ca-volume
+      - license_data:/etc/bringup:ro
     healthcheck:
       <<: *healthcheck-go
     depends_on:
@@ -262,6 +269,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@rosbag_db:5432/bagmaster_rosbag?sslmode=disable
     volumes:
       - *ca-volume
+      - license_data:/etc/bringup:ro
     healthcheck:
       <<: *healthcheck-go
     depends_on:
@@ -295,6 +303,7 @@ services:
       DEFAULT_STORAGE_QUOTA_BYTES: "549755813888"
     volumes:
       - *ca-volume
+      - license_data:/etc/bringup:ro
     extra_hosts:
       - "s3.${DOMAIN:-bringup.localhost}:host-gateway"
     ports:
@@ -424,6 +433,22 @@ services:
     networks:
       - bagmaster_net
 
+  bringup-helper:
+    image: ghcr.io/bringup-labs/bringup-helper
+    container_name: bringup-helper
+    networks:
+      - bagmaster_net
+    volumes:
+      - license_data:/data/license
+      - *ca-volume
+    environment:
+      - BRINGUP_HELPER_DATA_DIR=/data/license
+      - BRINGUP_HELPER_MACHINE_NAME=local-dev
+      - SSL_CERT_FILE=/certs/rootCA.pem
+      - PORT=8000
+    restart: always
+    extra_hosts:
+      - "api.${DOMAIN:-bringup.localhost}:host-gateway"
 # ── Networks ─────────────────────────────────────────────────
 networks:
   bagmaster_net:
@@ -433,11 +458,12 @@ networks:
 
 # ── Volumes ──────────────────────────────────────────────────
 volumes:
+  action_postgres_data:
   auth_postgres_data:
   experiment_postgres_data:
-  rosbag_postgres_data:
-  storage_postgres_data:
-  action_postgres_data:
   flow_postgres_data:
   jenkins_home:
+  license_data:
   minio_data:
+  rosbag_postgres_data:
+  storage_postgres_data:
