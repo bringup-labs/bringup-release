@@ -119,8 +119,6 @@ services:
       <<: *healthcheck-go
       interval: 30s
       start_period: 10s
-    ports:
-      - "8600:8000"
     networks:
       - bagmaster_net
 
@@ -181,8 +179,6 @@ services:
       - *ca-volume
     healthcheck:
       <<: *healthcheck-go
-    ports:
-      - "8500:8000"
     depends_on:
       action_db:
         condition: service_healthy
@@ -306,8 +302,6 @@ services:
       - license_data:/etc/bringup:ro
     extra_hosts:
       - "s3.${DOMAIN:-bringup.localhost}:host-gateway"
-    ports:
-      - "8400:8000"
     depends_on:
       minio_createbucket:
         condition: service_completed_successfully
