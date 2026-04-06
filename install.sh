@@ -121,10 +121,13 @@ log "Setting up mkcert CA..."
 # Identify the regular user's CA Root to ensure consistency across root and user calls.
 export CAROOT=$(sudo -u "$USER_NAME" mkcert -CAROOT 2>/dev/null || echo "$USER_HOME/.local/share/mkcert")
 mkdir -p "$CAROOT"
-chown -R "$USER_NAME:$USER_NAME" "$CAROOT" 2>/dev/null || true
-
 # 1. Update system trust store (as root)
 mkcert -install
+
+# Ensure the regular user owns the CA files (since mkcert as root may have created them)
+chown -R "$USER_NAME:$USER_NAME" "$CAROOT" 2>/dev/null || true
+# Ensure permissions allow the user to read the keys
+chmod -R u+rwX "$CAROOT" 2>/dev/null || true
 
 # 2. Update browser trust stores (as regular user)
 # This resolves the "no Firefox/Chrome security databases found" error when running as root.
