@@ -217,17 +217,17 @@ done
 # ----------------------------
 
 log "Pulling images..."
-docker compose -f "$COMPOSE_FILE" pull
+sudo -u "$USER_NAME" docker compose -f "$COMPOSE_FILE" pull
 
 # ----------------------------
 # Start services
 # ----------------------------
 
 log "Cleaning up existing containers..."
-docker compose -f "$COMPOSE_FILE" down --remove-orphans || true
+sudo -u "$USER_NAME" docker compose -f "$COMPOSE_FILE" down --remove-orphans || true
 
 log "Starting services..."
-docker compose -f "$COMPOSE_FILE" up -d
+sudo -u "$USER_NAME" docker compose -f "$COMPOSE_FILE" up -d
 
 # ----------------------------
 # Wait for readiness
@@ -239,7 +239,7 @@ MAX_RETRIES=40
 RETRY=0
 
 for ((i=1;i<=MAX_RETRIES;i++)); do
-  if curl -sk "https://$DOMAIN" >/dev/null; then
+  if sudo -u "$USER_NAME" curl -sk "https://$DOMAIN" >/dev/null; then
     log "App is ready!"
     break
   fi
