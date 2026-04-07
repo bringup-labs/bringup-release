@@ -81,6 +81,7 @@ services:
     environment:
       NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
       NEXT_PUBLIC_VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
+      NEXT_PUBLIC_BRINGUP_HELPER_URL: https://checks.${DOMAIN:-bringup.localhost}
       API_BASE_URL: https://api.${DOMAIN:-bringup.localhost}
       VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
       KC_CLIENT_ID: next-auth-client
@@ -440,6 +441,11 @@ services:
       - BRINGUP_HELPER_MACHINE_NAME=local-dev
       - SSL_CERT_FILE=/certs/rootCA.pem
       - PORT=8000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bringup-helper.rule=Host(`checks.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.bringup-helper.entrypoints=websecure"
+      - "traefik.http.services.bringup-helper.loadbalancer.server.port=8000"
     restart: always
     extra_hosts:
       - "api.${DOMAIN:-bringup.localhost}:host-gateway"
