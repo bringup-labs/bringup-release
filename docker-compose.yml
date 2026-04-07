@@ -79,15 +79,14 @@ services:
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
     environment:
-      NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
-      NEXT_PUBLIC_VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
-      NEXT_PUBLIC_BRINGUP_HELPER_URL: https://checks.${DOMAIN:-bringup.localhost}
       API_BASE_URL: https://api.${DOMAIN:-bringup.localhost}
-      VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
+      HELPER_URL: https://checks.${DOMAIN:-bringup.localhost}
       KC_CLIENT_ID: next-auth-client
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-next-auth-secret-change-in-production}
       KC_ISSUER: https://idp.${DOMAIN:-bringup.localhost}/realms/bringuplabs
       KC_REDIRECT_URI: https://app.${DOMAIN:-bringup.localhost}/api/auth/callback
+      NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
+      VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
     networks:
       - bagmaster_net
 
