@@ -80,7 +80,6 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
     environment:
       API_BASE_URL: https://api.${DOMAIN:-bringup.localhost}
-      HELPER_URL: https://checks.${DOMAIN:-bringup.localhost}
       KC_CLIENT_ID: next-auth-client
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-next-auth-secret-change-in-production}
       KC_ISSUER: https://idp.${DOMAIN:-bringup.localhost}/realms/bringuplabs
@@ -440,11 +439,6 @@ services:
       - BRINGUP_HELPER_MACHINE_NAME=local-dev
       - SSL_CERT_FILE=/certs/rootCA.pem
       - PORT=8000
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.bringup-helper.rule=Host(`checks.${DOMAIN:-bringup.localhost}`)"
-      - "traefik.http.routers.bringup-helper.entrypoints=websecure"
-      - "traefik.http.services.bringup-helper.loadbalancer.server.port=8000"
     restart: always
     extra_hosts:
       - "api.${DOMAIN:-bringup.localhost}:host-gateway"
