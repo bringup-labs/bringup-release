@@ -66,7 +66,7 @@ services:
       - bagmaster_net
 
   frontend:
-    image: ghcr.io/bringup-labs/bringup-ui:latest
+    image: bringuplabs/bringup-ui:latest
     volumes:
       - *ca-volume
       - license_data:/data/license:ro
@@ -90,7 +90,7 @@ services:
       - bagmaster_net
 
   api_gateway:
-    image: ghcr.io/bringup-labs/bringup-gateway
+    image: bringuplabs/bringup-gateway
     environment:
       KONG_LUA_SSL_TRUSTED_CERTIFICATE: /certs/rootCA.pem
     volumes:
@@ -106,7 +106,7 @@ services:
       - bagmaster_net
 
   transpiler_service:
-    image: ghcr.io/bringup-labs/bringup-transpiler
+    image: bringuplabs/bringup-transpiler
     environment:
       <<: *ca-trust-env
       FLOW_SERVICE_URL: http://flow_service:8000
@@ -122,7 +122,7 @@ services:
       - bagmaster_net
 
   flow_service:
-    image: ghcr.io/bringup-labs/bringup-flow
+    image: bringuplabs/bringup-flow
     environment:
       <<: *ca-trust-env
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@flow_db:5432/bagmaster_flows?sslmode=disable
@@ -151,7 +151,7 @@ services:
       <<: *healthcheck-postgres
 
   action_service:
-    image: ghcr.io/bringup-labs/bringup-action
+    image: bringuplabs/bringup-action
     user: "0:0"
     environment:
       <<: *ca-trust-env
@@ -200,7 +200,7 @@ services:
       <<: *healthcheck-postgres
 
   auth_service:
-    image: ghcr.io/bringup-labs/bringup-auth
+    image: bringuplabs/bringup-auth
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@auth_db:5432/bagmaster_auth?sslmode=disable
       KEYCLOAK_ADMIN_USER: ${KC_ADMIN_USER:-admin}
@@ -230,7 +230,7 @@ services:
       <<: *healthcheck-postgres
 
   experiment_service:
-    image: ghcr.io/bringup-labs/bringup-experiment
+    image: bringuplabs/bringup-experiment
     environment:
       <<: *ca-trust-env
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@experiment_db:5432/bagmaster_experiment?sslmode=disable
@@ -257,7 +257,7 @@ services:
       <<: *healthcheck-postgres
 
   rosbag_service:
-    image: ghcr.io/bringup-labs/bringup-rosbag
+    image: bringuplabs/bringup-rosbag
     restart: unless-stopped
     environment:
       <<: *ca-trust-env
@@ -285,7 +285,7 @@ services:
       <<: *healthcheck-postgres
 
   storage_service:
-    image: ghcr.io/bringup-labs/bringup-storage
+    image: bringuplabs/bringup-storage
     environment:
       <<: *ca-trust-env
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@storage_db:5432/bagmaster_storage?sslmode=disable
@@ -372,7 +372,7 @@ services:
       - bagmaster_net
 
   bringup-engine:
-    image: ghcr.io/bringup-labs/pipeline-engine
+    image: bringuplabs/pipeline-engine
     user: "0:0"
     restart: unless-stopped
     volumes:
@@ -395,7 +395,7 @@ services:
       - bagmaster_net
 
   idp:
-    image: ghcr.io/bringup-labs/bringup-idp
+    image: bringuplabs/bringup-idp
     environment:
       KC_HOSTNAME: idp.${DOMAIN:-bringup.localhost}
     labels:
@@ -407,7 +407,7 @@ services:
       - bagmaster_net
 
   visualizer:
-    image: ghcr.io/bringup-labs/visualizer
+    image: bringuplabs/visualizer
     environment:
       <<: *ca-trust-env
       NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
@@ -427,7 +427,7 @@ services:
       - bagmaster_net
 
   bringup-helper:
-    image: ghcr.io/bringup-labs/bringup-helper
+    image: bringuplabs/bringup-helper
     container_name: bringup-helper
     networks:
       - bagmaster_net
