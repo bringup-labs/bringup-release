@@ -1,0 +1,462 @@
+# =============================================================
+# Bringup Platform – Docker Compose
+# =============================================================
+# All tunables are read from .env (auto-loaded by Compose).
+# Run install.sh to generate .env and certs, or copy
+# .env.example → .env and adjust manually.
+# =============================================================
+
+# ── Reusable fragments (YAML anchors) ───────────────────────
+
+x-ca-trust-env: &ca-trust-env
+  REQUESTS_CA_BUNDLE: /certs/rootCA.pem
+  SSL_CERT_FILE: /certs/rootCA.pem
+
+x-ca-volume: &ca-volume
+  ${CERT_DIR:-./certs}/rootCA.pem:/certs/rootCA.pem:ro
+
+x-healthcheck-go: &healthcheck-go
+  test: ["CMD", "/server", "--healthcheck"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-healthcheck-postgres: &healthcheck-postgres
+  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-postgres-base: &postgres-base
+  image: postgres:17-alpine
+  networks:
+    - bagmaster_net
+
+# ── Services ─────────────────────────────────────────────────
+
+services:
+
+  ingress:
+    image: traefik:v2.11
+    restart: always
+    command:
+      - "--ping=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/certs/tls.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${CERT_DIR:-./certs}:/certs:ro
+    networks:
+      - bagmaster_net
+
+  frontend:
+    image: bringuplabs/bringup-ui:latest
+    volumes:
+      - *ca-volume
+      - license_data:/data/license:ro
+    extra_hosts:
+      - "idp.${DOMAIN:-bringup.localhost}:host-gateway"
+      - "api.${DOMAIN:-bringup.localhost}:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    environment:
+      API_BASE_URL: https://api.${DOMAIN:-bringup.localhost}
+      KC_CLIENT_ID: next-auth-client
+      KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-next-auth-secret-change-in-production}
+      KC_ISSUER: https://idp.${DOMAIN:-bringup.localhost}/realms/bringuplabs
+      KC_REDIRECT_URI: https://app.${DOMAIN:-bringup.localhost}/api/auth/callback
+      NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
+      VISUALIZER_URL: https://visualizer.${DOMAIN:-bringup.localhost}
+    networks:
+      - bagmaster_net
+
+  api_gateway:
+    image: bringuplabs/bringup-gateway
+    environment:
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: /certs/rootCA.pem
+    volumes:
+      - *ca-volume
+    extra_hosts:
+      - "idp.${DOMAIN:-bringup.localhost}:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api_gateway.rule=Host(`api.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.api_gateway.entrypoints=websecure"
+      - "traefik.http.services.api_gateway.loadbalancer.server.port=8000"
+    networks:
+      - bagmaster_net
+
+  transpiler_service:
+    image: bringuplabs/bringup-transpiler
+    environment:
+      <<: *ca-trust-env
+      FLOW_SERVICE_URL: http://flow_service:8000
+      DEFAULT_DOCKER_NETWORK: bagmaster_net
+    volumes:
+      - *ca-volume
+      - license_data:/etc/bringup:ro
+    healthcheck:
+      <<: *healthcheck-go
+      interval: 30s
+      start_period: 10s
+    networks:
+      - bagmaster_net
+
+  flow_service:
+    image: bringuplabs/bringup-flow
+    environment:
+      <<: *ca-trust-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@flow_db:5432/bagmaster_flows?sslmode=disable
+    volumes:
+      - *ca-volume
+      - license_data:/etc/bringup:ro
+    healthcheck:
+      <<: *healthcheck-go
+      interval: 30s
+      start_period: 10s
+    depends_on:
+      flow_db:
+        condition: service_healthy
+    networks:
+      - bagmaster_net
+
+  flow_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_flows
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - flow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  action_service:
+    image: bringuplabs/bringup-action
+    user: "0:0"
+    environment:
+      <<: *ca-trust-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@action_db:5432/bagmaster_action?sslmode=disable
+      API_PREFIX: /actions
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-bagmaster-storage}
+      MINIO_USE_SSL: "false"
+      DOCKER_NETWORK: bagmaster_net
+      NOTEBOOK_IMAGE: bagmaster-action-notebook:latest
+      AGENT_EXECUTION_SECRET_KEY: anothersecretkey
+      JENKINS_URL: http://bringup-engine:8080
+      JENKINS_ADMIN_USER: ${JENKINS_ADMIN_USER:-admin}
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-admin12345}
+      JENKINS_WEBHOOK_TOKEN: ${JENKINS_WEBHOOK_TOKEN:-randomtoken}
+      API_GATEWAY_URL: http://api_gateway:8000
+      ROSBAG_SERVICE_URL: http://rosbag_service:8000
+      PROXY_HOST_ADDRESS: host.docker.internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - license_data:/etc/bringup:ro
+      - *ca-volume
+    healthcheck:
+      <<: *healthcheck-go
+    depends_on:
+      action_db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      bringup-engine:
+        condition: service_healthy
+    networks:
+      - bagmaster_net
+
+  action_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_action
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - action_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  auth_service:
+    image: bringuplabs/bringup-auth
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@auth_db:5432/bagmaster_auth?sslmode=disable
+      KEYCLOAK_ADMIN_USER: ${KC_ADMIN_USER:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-password}
+      FLOW_SERVICE_BOOTSTRAP_URL: http://api_gateway:8000/flows/bootstrap/examples
+      ROSBAG_SERVICE_BOOTSTRAP_URL: http://api_gateway:8000/rosbags/bootstrap/starter
+    healthcheck:
+      <<: *healthcheck-go
+    volumes:
+      - license_data:/etc/bringup:ro
+      - *ca-volume
+    depends_on:
+      auth_db:
+        condition: service_healthy
+    networks:
+      - bagmaster_net
+
+  auth_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_auth
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - auth_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  experiment_service:
+    image: bringuplabs/bringup-experiment
+    environment:
+      <<: *ca-trust-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@experiment_db:5432/bagmaster_experiment?sslmode=disable
+    volumes:
+      - *ca-volume
+      - license_data:/etc/bringup:ro
+    healthcheck:
+      <<: *healthcheck-go
+    depends_on:
+      experiment_db:
+        condition: service_healthy
+    networks:
+      - bagmaster_net
+
+  experiment_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_experiment
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - experiment_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  rosbag_service:
+    image: bringuplabs/bringup-rosbag
+    restart: unless-stopped
+    environment:
+      <<: *ca-trust-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@rosbag_db:5432/bagmaster_rosbag?sslmode=disable
+    volumes:
+      - *ca-volume
+      - license_data:/etc/bringup:ro
+    healthcheck:
+      <<: *healthcheck-go
+    depends_on:
+      rosbag_db:
+        condition: service_healthy
+    networks:
+      - bagmaster_net
+
+  rosbag_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_rosbag
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - rosbag_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  storage_service:
+    image: bringuplabs/bringup-storage
+    environment:
+      <<: *ca-trust-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@storage_db:5432/bagmaster_storage?sslmode=disable
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_S3_ENDPOINT_URL: https://s3.${DOMAIN:-bringup.localhost}
+      AWS_S3_EXTERNAL_ENDPOINT_URL: https://s3.${DOMAIN:-bringup.localhost}
+      AWS_S3_REGION_NAME: us-east-1
+      AWS_STORAGE_BUCKET_NAME: ${MINIO_BUCKET:-bagmaster-storage}
+      DEFAULT_STORAGE_QUOTA_BYTES: "549755813888"
+    volumes:
+      - *ca-volume
+      - license_data:/etc/bringup:ro
+    extra_hosts:
+      - "s3.${DOMAIN:-bringup.localhost}:host-gateway"
+    depends_on:
+      minio_createbucket:
+        condition: service_completed_successfully
+      storage_db:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-go
+    networks:
+      - bagmaster_net
+
+  storage_db:
+    <<: *postgres-base
+    environment:
+      POSTGRES_DB: bagmaster_storage
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - storage_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-postgres
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-03-25T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    volumes:
+      - minio_data:/data
+      - ${PWD}/configs/minio/minio.license:/minio.license:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio.rule=Host(`s3.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.minio.entrypoints=websecure"
+      - "traefik.http.services.minio.loadbalancer.server.port=9000"
+    networks:
+      - bagmaster_net
+
+  minio_createbucket:
+    image: pgsty/mc:RELEASE.2026-03-21T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./configs/minio/cors.xml:/tmp/cors.xml:ro
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Setting up MinIO alias...';
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      echo 'Creating bucket if it does not exist...';
+      /usr/bin/mc mb myminio/${MINIO_BUCKET:-bagmaster-storage} 2>/dev/null || echo 'Bucket already exists, continuing...';
+      echo 'Setting bucket policy to public...';
+      /usr/bin/mc anonymous set public myminio/${MINIO_BUCKET:-bagmaster-storage} || echo 'Policy already set or failed, continuing...';
+      echo 'Setting CORS configuration on bucket...';
+      /usr/bin/mc cors set myminio/${MINIO_BUCKET:-bagmaster-storage} /tmp/cors.xml && echo 'CORS configured successfully' || echo 'CORS config failed, continuing...';
+      echo 'Verifying CORS configuration...';
+      /usr/bin/mc cors get myminio/${MINIO_BUCKET:-bagmaster-storage} || echo 'No CORS configuration found';
+      echo 'MinIO setup completed successfully';
+      exit 0;
+      "
+    networks:
+      - bagmaster_net
+
+  bringup-engine:
+    image: bringuplabs/pipeline-engine
+    user: "0:0"
+    restart: unless-stopped
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      JENKINS_URL: http://bringup-engine:8080
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bringup-engine.rule=Host(`pipeline.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.bringup-engine.entrypoints=websecure"
+      - "traefik.http.services.bringup-engine.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - bagmaster_net
+
+  idp:
+    image: bringuplabs/bringup-idp
+    environment:
+      KC_HOSTNAME: idp.${DOMAIN:-bringup.localhost}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.idp.rule=Host(`idp.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.idp.entrypoints=websecure"
+      - "traefik.http.services.idp.loadbalancer.server.port=8080"
+    networks:
+      - bagmaster_net
+
+  visualizer:
+    image: bringuplabs/visualizer
+    environment:
+      <<: *ca-trust-env
+      NODE_EXTRA_CA_CERTS: /certs/rootCA.pem
+      API_URL: https://api.${DOMAIN:-bringup.localhost}
+      BAGMASTER_API_UPSTREAM: https://api.${DOMAIN:-bringup.localhost}
+      BAGMASTER_KEYCLOAK_URL: https://idp.${DOMAIN:-bringup.localhost}
+      BAGMASTER_KEYCLOAK_REALM: bringuplabs
+      BAGMASTER_KEYCLOAK_CLIENT_ID: bringup-client
+    volumes:
+      - *ca-volume
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.visualizer.rule=Host(`visualizer.${DOMAIN:-bringup.localhost}`)"
+      - "traefik.http.routers.visualizer.entrypoints=websecure"
+      - "traefik.http.services.visualizer.loadbalancer.server.port=8080"
+    networks:
+      - bagmaster_net
+
+  bringup-helper:
+    image: bringuplabs/bringup-helper
+    container_name: bringup-helper
+    networks:
+      - bagmaster_net
+    volumes:
+      - license_data:/data/license
+      - *ca-volume
+    environment:
+      - BRINGUP_HELPER_DATA_DIR=/data/license
+      - BRINGUP_HELPER_MACHINE_NAME=local-dev
+      - SSL_CERT_FILE=/certs/rootCA.pem
+      - PORT=8000
+    restart: always
+    extra_hosts:
+      - "api.${DOMAIN:-bringup.localhost}:host-gateway"
+# ── Networks ─────────────────────────────────────────────────
+networks:
+  bagmaster_net:
+    name: bagmaster_net
+    driver: bridge
+    attachable: true
+
+# ── Volumes ──────────────────────────────────────────────────
+volumes:
+  action_postgres_data:
+  auth_postgres_data:
+  experiment_postgres_data:
+  flow_postgres_data:
+  jenkins_home:
+  license_data:
+  minio_data:
+  rosbag_postgres_data:
+  storage_postgres_data:
