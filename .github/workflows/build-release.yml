@@ -1,0 +1,169 @@
+# Build and publish installers to a GitHub Release on every v* tag.
+#
+# Two parallel jobs:
+#   build-mac   – macos-latest → universal .pkg (wraps the launchd plist + daemon)
+#   build-linux – ubuntu-latest → .deb + .rpm for x64 and arm64 (includes systemd unit)
+#
+#
+# Both jobs upload directly to the same GitHub Release.
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# GITHUB_TOKEN needs write access to create / update releases.
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 – macOS .pkg (universal: arm64 + x64 fat binary via lipo)
+  # ---------------------------------------------------------------------------
+  build-mac:
+    name: Build macOS PKG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          # apps/bringup_desktop_app is a git submodule — pull it in automatically.
+          submodules: recursive
+
+      # copy-daemon.sh resolves workload-agent as ../workload-agent relative to
+      # apps/bringup_desktop_app/, so it must land at apps/workload-agent/.
+      - name: Checkout workload-agent
+        uses: actions/checkout@v4
+        with:
+          repository: bringup-labs/workload-agent
+          path: apps/workload-agent
+          # Remove the token line below if workload-agent is a public repository.
+          token: ${{ secrets.WORKLOAD_AGENT_TOKEN }}
+
+      # Go is required by workload-agent/scripts/build.sh which cross-compiles
+      # the daemon (bringupd) and CLI (bringup) for darwin/universal.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: apps/workload-agent/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: apps/bringup_desktop_app/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: apps/bringup_desktop_app
+        run: npm ci
+
+      # Compiles bringupd (arm64) + bringupd (amd64) then runs lipo to produce
+      # a universal fat binary, placing it in resources/bin/.
+      - name: Build Go daemon binaries (darwin/universal)
+        working-directory: apps/bringup_desktop_app
+        run: npm run prebuild:mac
+
+      - name: Build Electron renderer & main (Vite)
+        working-directory: apps/bringup_desktop_app
+        run: npm run vite:build:app
+
+      # Override electron-builder.yml targets (dmg + zip) at the CLI level.
+      # --publish never prevents accidental writes to the S3 bucket defined in
+      # electron-builder.yml; GitHub Release is the sole distribution channel here.
+      - name: Package macOS universal PKG
+        working-directory: apps/bringup_desktop_app
+        run: npx electron-builder --mac pkg --universal --publish never
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Prevents electron-builder from probing the system keychain when the
+          # signing secrets above are absent. Has no effect when CSC_LINK is set.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload PKG to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: apps/bringup_desktop_app/dist/*.pkg
+
+  # ---------------------------------------------------------------------------
+  # Job 2 – Linux .deb + .rpm (x64 and arm64)
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux DEB + RPM
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout workload-agent
+        uses: actions/checkout@v4
+        with:
+          repository: bringup-labs/workload-agent
+          path: apps/workload-agent
+          token: ${{ secrets.WORKLOAD_AGENT_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: apps/workload-agent/go.sum
+
+      # rpmbuild is needed by electron-builder to produce .rpm packages.
+      # fakeroot is typically pre-installed on ubuntu-latest; listed here for
+      # clarity in case the runner image changes.
+      - name: Install RPM build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y rpm fakeroot
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: apps/bringup_desktop_app/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: apps/bringup_desktop_app
+        run: npm ci
+
+      # copy-daemon.sh builds linux/amd64 only; the arm64 .deb/.rpm packages are
+      # produced by electron-builder's cross-compilation toolchain (no native arm64
+      # runner required — electron-builder ships its own cross build infrastructure).
+      - name: Build Go daemon binary (linux/amd64)
+        working-directory: apps/bringup_desktop_app
+        run: npm run prebuild:linux
+
+      - name: Build Electron renderer & main (Vite)
+        working-directory: apps/bringup_desktop_app
+        run: npm run vite:build:app
+
+      # Override electron-builder.yml targets (AppImage + deb) to produce deb and
+      # rpm for both architectures. The systemd unit file (bringupd.service) is
+      # bundled via extraResources in electron-builder.yml and placed into the
+      # package's file list by the deb/rpm packagers automatically.
+      #
+      # Linux package signing (GPG) is not configured here. To add it, set:
+      #   DEB_SIGN_KEY / DEB_SIGN_KEY_ID  for .deb signing via dpkg-sig
+      #   RPM_GPG_KEY                      for .rpm signing via rpmsign
+      - name: Package Linux DEB + RPM (x64 + arm64)
+        working-directory: apps/bringup_desktop_app
+        run: npx electron-builder --linux deb rpm --x64 --arm64 --publish never
+
+      - name: Upload DEB + RPM to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            apps/bringup_desktop_app/dist/*.deb
+            apps/bringup_desktop_app/dist/*.rpm
