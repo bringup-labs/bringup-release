@@ -1,0 +1,3 @@
+[submodule "apps/bringup_desktop_app"]
+	path = apps/bringup_desktop_app
+	url = https://github.com/bringup-labs/bringup_desktop_app
