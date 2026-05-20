@@ -1,169 +1,159 @@
-# Build and publish installers to a GitHub Release on every v* tag.
-#
-# Two parallel jobs:
-#   build-mac   – macos-latest → universal .pkg (wraps the launchd plist + daemon)
-#   build-linux – ubuntu-latest → .deb + .rpm for x64 and arm64 (includes systemd unit)
-#
-#
-# Both jobs upload directly to the same GitHub Release.
-
 name: Build & Release
 
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark as pre-release (for staging)'
+        required: false
+        default: false
+        type: boolean
 
-# GITHUB_TOKEN needs write access to create / update releases.
 permissions:
   contents: write
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Job 1 – macOS .pkg (universal: arm64 + x64 fat binary via lipo)
-  # ---------------------------------------------------------------------------
-  build-mac:
-    name: Build macOS PKG
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: [macOS]
+            build_cmd: build:mac
+            platform: mac
+          - os: [Linux]
+            build_cmd: build:linux
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout repository (with submodules)
-        uses: actions/checkout@v4
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
         with:
-          # apps/bringup_desktop_app is a git submodule — pull it in automatically.
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
           submodules: recursive
+          token: ${{ steps.app-token.outputs.token }}
 
-      # copy-daemon.sh resolves workload-agent as ../workload-agent relative to
-      # apps/bringup_desktop_app/, so it must land at apps/workload-agent/.
-      - name: Checkout workload-agent
-        uses: actions/checkout@v4
-        with:
-          repository: bringup-labs/workload-agent
-          path: apps/workload-agent
-          # Remove the token line below if workload-agent is a public repository.
-          token: ${{ secrets.WORKLOAD_AGENT_TOKEN }}
-
-      # Go is required by workload-agent/scripts/build.sh which cross-compiles
-      # the daemon (bringupd) and CLI (bringup) for darwin/universal.
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-          cache-dependency-path: apps/workload-agent/go.sum
+          go-version: '1.26'
+          cache-dependency-path: lib/bringup-daemon/go.sum
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: apps/bringup_desktop_app/package-lock.json
+          cache: 'npm'
 
-      - name: Install Node dependencies
-        working-directory: apps/bringup_desktop_app
+      - name: Install dependencies
         run: npm ci
 
-      # Compiles bringupd (arm64) + bringupd (amd64) then runs lipo to produce
-      # a universal fat binary, placing it in resources/bin/.
-      - name: Build Go daemon binaries (darwin/universal)
-        working-directory: apps/bringup_desktop_app
-        run: npm run prebuild:mac
-
-      - name: Build Electron renderer & main (Vite)
-        working-directory: apps/bringup_desktop_app
-        run: npm run vite:build:app
-
-      # Override electron-builder.yml targets (dmg + zip) at the CLI level.
-      # --publish never prevents accidental writes to the S3 bucket defined in
-      # electron-builder.yml; GitHub Release is the sole distribution channel here.
-      - name: Package macOS universal PKG
-        working-directory: apps/bringup_desktop_app
-        run: npx electron-builder --mac pkg --universal --publish never
+      # ── macOS code-signing setup ────────────────────────────────────────────
+      # Decodes the self-signed .p12 from secrets into a temporary keychain so
+      # that electron-osx-sign / codesign can find the identity without a GUI.
+      - name: Import signing certificate (macOS only)
+        if: matrix.platform == 'mac'
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Prevents electron-builder from probing the system keychain when the
-          # signing secrets above are absent. Has no effect when CSC_LINK is set.
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
 
-      - name: Upload PKG to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: apps/bringup_desktop_app/dist/*.pkg
+          # Decode the base64 secret back into a .p12 file
+          echo "$APPLE_CERT_P12" | base64 --decode > "$CERT_PATH"
 
-  # ---------------------------------------------------------------------------
-  # Job 2 – Linux .deb + .rpm (x64 and arm64)
-  # ---------------------------------------------------------------------------
-  build-linux:
-    name: Build Linux DEB + RPM
-    runs-on: ubuntu-latest
+          # Create a temporary keychain with a known password
+          security create-keychain -p "gh-actions" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "gh-actions" "$KEYCHAIN_PATH"
 
-    steps:
-      - name: Checkout repository (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+          # Import the certificate; -A allows any application to use it
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
 
-      - name: Checkout workload-agent
-        uses: actions/checkout@v4
-        with:
-          repository: bringup-labs/workload-agent
-          path: apps/workload-agent
-          token: ${{ secrets.WORKLOAD_AGENT_TOKEN }}
+          # Prepend the temp keychain to the user search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache-dependency-path: apps/workload-agent/go.sum
+          # Allow codesign to access the key without an interactive prompt
+          security set-key-partition-list \
+            -S "apple-tool:,apple:,codesign:" \
+            -s -k "gh-actions" "$KEYCHAIN_PATH"
 
-      # rpmbuild is needed by electron-builder to produce .rpm packages.
-      # fakeroot is typically pre-installed on ubuntu-latest; listed here for
-      # clarity in case the runner image changes.
-      - name: Install RPM build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y rpm fakeroot
+          # Clean up the decoded cert file immediately
+          rm -f "$CERT_PATH"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: apps/bringup_desktop_app/package-lock.json
+      - name: Build daemon binaries (mac)
+        if: matrix.platform == 'mac'
+        run: ./scripts/copy-daemon.sh darwin universal
 
-      - name: Install Node dependencies
-        working-directory: apps/bringup_desktop_app
-        run: npm ci
+      - name: Build daemon binaries (linux)
+        if: matrix.platform == 'linux'
+        run: ./scripts/copy-daemon.sh linux amd64
 
-      # copy-daemon.sh builds linux/amd64 only; the arm64 .deb/.rpm packages are
-      # produced by electron-builder's cross-compilation toolchain (no native arm64
-      # runner required — electron-builder ships its own cross build infrastructure).
-      - name: Build Go daemon binary (linux/amd64)
-        working-directory: apps/bringup_desktop_app
-        run: npm run prebuild:linux
-
-      - name: Build Electron renderer & main (Vite)
-        working-directory: apps/bringup_desktop_app
+      - name: Build Vite
         run: npm run vite:build:app
 
-      # Override electron-builder.yml targets (AppImage + deb) to produce deb and
-      # rpm for both architectures. The systemd unit file (bringupd.service) is
-      # bundled via extraResources in electron-builder.yml and placed into the
-      # package's file list by the deb/rpm packagers automatically.
-      #
-      # Linux package signing (GPG) is not configured here. To add it, set:
-      #   DEB_SIGN_KEY / DEB_SIGN_KEY_ID  for .deb signing via dpkg-sig
-      #   RPM_GPG_KEY                      for .rpm signing via rpmsign
-      - name: Package Linux DEB + RPM (x64 + arm64)
-        working-directory: apps/bringup_desktop_app
-        run: npx electron-builder --linux deb rpm --x64 --arm64 --publish never
+      # Build, sign, notarize, and staple — but do NOT upload yet.
+      # afterSign notarizes+staples the .app; afterAllArtifactBuild notarizes+staples the .pkg.
+      # We upload after stapling so S3 gets the final file (stapling changes the sha512).
+      - name: Build (mac)
+        if: matrix.platform == 'mac'
+        env:
+          BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+          # CSC_NAME signs the .app; CSC_INSTALLER_NAME signs the .pkg.
+          # Both must match the certificate Common Names exactly.
+          CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
+          CSC_INSTALLER_NAME: "Rahul Katiyar (F5YXN979Q6)"
+          CSC_KEYCHAIN: "${{ runner.temp }}/build.keychain"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --publish never
+        shell: bash
 
-      - name: Upload DEB + RPM to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            apps/bringup_desktop_app/dist/*.deb
-            apps/bringup_desktop_app/dist/*.rpm
+      - name: Upload artifacts (mac)
+        if: matrix.platform == 'mac'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp dist/ s3://bringup-releases/ \
+            --endpoint-url https://storage.bringup.dev \
+            --recursive \
+            --exclude "*" \
+            --include "*.pkg" \
+            --include "*.zip" \
+            --include "*.blockmap" \
+            --include "latest-mac.yml"
+        shell: bash
+
+      - name: Publish (linux)
+        if: matrix.platform == 'linux'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: npx electron-builder --linux --publish always
+        shell: bash
+
+      # ── Cleanup ─────────────────────────────────────────────────────────────
+      - name: Delete temporary keychain (macOS only)
+        if: matrix.platform == 'mac' && always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain" || true
