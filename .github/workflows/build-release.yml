@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: [macOS]
+          - os: macos-latest
             build_cmd: build:mac
             platform: mac
-          - os: [Linux]
+          - os: ubuntu-latest
             build_cmd: build:linux
             platform: linux
 
