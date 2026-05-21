@@ -80,12 +80,15 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "gh-actions" "$KEYCHAIN_PATH"
 
-          # Import the certificate; -A allows any application to use it
+          # Import the certificate. -A lets ANY tool use the imported keys
+          # without an interactive keychain prompt. This must cover the .pkg
+          # signing tools (productbuild / productsign / pkgbuild), not just
+          # codesign — otherwise .pkg signing blocks on a GUI authorization
+          # dialog that a headless CI runner can never answer (silent hang).
           security import "$CERT_PATH" \
             -k "$KEYCHAIN_PATH" \
             -P "$APPLE_CERT_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
+            -A
 
           # Prepend the temp keychain to the user search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" \
@@ -110,6 +113,9 @@ jobs:
         shell: bash
         env:
           BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+          # Verbose electron-builder logging — surfaces the exact pkg/sign
+          # command and pinpoints where a build stalls. Remove once stable.
+          DEBUG: electron-builder
           # CSC_NAME signs the .app and the daemon binary; CSC_INSTALLER_NAME
           # signs the .pkg. Both must match the certificate Common Names exactly.
           CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
