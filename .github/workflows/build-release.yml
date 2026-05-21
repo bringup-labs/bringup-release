@@ -105,6 +105,7 @@ jobs:
       # / afterAllArtifactBuild hooks, --publish never), then uploads the
       # stapled artifacts to S3. publish:linux builds + publishes each arch.
       - name: Build & publish
+        timeout-minutes: 45
         working-directory: apps/bringup_desktop_app
         shell: bash
         env:
