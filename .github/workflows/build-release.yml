@@ -22,10 +22,10 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            build_cmd: build:mac
+            publish_cmd: publish:mac
             platform: mac
           - os: ubuntu-latest
-            build_cmd: build:linux
+            publish_cmd: publish:linux
             platform: linux
 
     runs-on: ${{ matrix.os }}
@@ -49,15 +49,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-          cache-dependency-path: lib/bringup-daemon/go.sum
+          cache-dependency-path: apps/bringup_desktop_app/lib/bringup-daemon/go.sum
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           cache: 'npm'
+          cache-dependency-path: apps/bringup_desktop_app/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefix apps/bringup_desktop_app
 
       # ── macOS code-signing setup ────────────────────────────────────────────
       # Decodes the self-signed .p12 from secrets into a temporary keychain so
@@ -98,62 +99,30 @@ jobs:
           # Clean up the decoded cert file immediately
           rm -f "$CERT_PATH"
 
-      - name: Build daemon binaries (mac)
-        if: matrix.platform == 'mac'
-        run: ./scripts/copy-daemon.sh darwin universal
-
-      - name: Build daemon binaries (linux)
-        if: matrix.platform == 'linux'
-        run: ./scripts/copy-daemon.sh linux amd64
-
-      - name: Build Vite
-        run: npm run vite:build:app
-
-      # Build, sign, notarize, and staple — but do NOT upload yet.
-      # afterSign notarizes+staples the .app; afterAllArtifactBuild notarizes+staples the .pkg.
-      # We upload after stapling so S3 gets the final file (stapling changes the sha512).
-      - name: Build (mac)
-        if: matrix.platform == 'mac'
+      # Drives the whole pipeline from the desktop app's package.json so the
+      # build logic stays in one place. publish:mac runs the daemon build,
+      # Vite build, electron-builder (sign + notarize + staple via the afterSign
+      # / afterAllArtifactBuild hooks, --publish never), then uploads the
+      # stapled artifacts to S3. publish:linux builds + publishes each arch.
+      - name: Build & publish
+        working-directory: apps/bringup_desktop_app
+        shell: bash
         env:
           BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
-          # CSC_NAME signs the .app; CSC_INSTALLER_NAME signs the .pkg.
-          # Both must match the certificate Common Names exactly.
+          # CSC_NAME signs the .app and the daemon binary; CSC_INSTALLER_NAME
+          # signs the .pkg. Both must match the certificate Common Names exactly.
           CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
           CSC_INSTALLER_NAME: "Rahul Katiyar (F5YXN979Q6)"
           CSC_KEYCHAIN: "${{ runner.temp }}/build.keychain"
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --publish never
-        shell: bash
-
-      - name: Upload artifacts (mac)
-        if: matrix.platform == 'mac'
-        env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-        run: |
-          aws s3 cp dist/ s3://bringup-releases/ \
-            --endpoint-url https://storage.bringup.dev \
-            --recursive \
-            --exclude "*" \
-            --include "*.pkg" \
-            --include "*.zip" \
-            --include "*.blockmap" \
-            --include "latest-mac.yml"
-        shell: bash
-
-      - name: Publish (linux)
-        if: matrix.platform == 'linux'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
-        run: npx electron-builder --linux --publish always
-        shell: bash
+        run: npm run ${{ matrix.publish_cmd }}
 
       # ── Cleanup ─────────────────────────────────────────────────────────────
       - name: Delete temporary keychain (macOS only)
-        if: matrix.platform == 'mac' && always()
+        if: always() && matrix.platform == 'mac'
         run: |
           security delete-keychain "$RUNNER_TEMP/build.keychain" || true
