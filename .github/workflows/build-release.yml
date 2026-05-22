@@ -216,18 +216,12 @@ jobs:
           submodules: recursive
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Get daemon version
-        id: get-version
-        run: |
-          VERSION=$(cat apps/bringup_desktop_app/lib/bringup-daemon/VERSION)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Download daemon checksum artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: daemon-sha-*
           merge-multiple: true
-          path: apps/bringup_desktop_app/dist/daemon/${{ steps.get-version.outputs.version }}
+          path: apps/bringup_desktop_app/dist/daemon
 
       - name: Generate manifest
         run: ./scripts/gen-daemon-manifest.sh
