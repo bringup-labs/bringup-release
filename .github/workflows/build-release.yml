@@ -151,7 +151,7 @@ jobs:
             --endpoint-url https://storage.bringup.dev \
             --recursive \
             --exclude "*" \
-            --include "bringupd-darwin-*"
+            --include "*bringupd-darwin-*"
         working-directory: apps/bringup_desktop_app
         shell: bash
 
@@ -179,7 +179,7 @@ jobs:
             --endpoint-url https://storage.bringup.dev \
             --recursive \
             --exclude "*" \
-            --include "bringupd-linux-*"
+            --include "*bringupd-linux-*"
         working-directory: apps/bringup_desktop_app
         shell: bash
 
