@@ -43,7 +43,10 @@ esac
 echo "Detected platform: ${KEY}"
 
 # ── Fetch and parse the manifest ────────────────────────────────────────────
-MANIFEST="$(curl -fsSL "${MANIFEST_URL}")"
+if ! MANIFEST="$(curl -fsSL "${MANIFEST_URL}" 2>&1)"; then
+    echo "Error: Failed to fetch release manifest from ${MANIFEST_URL}" >&2
+    exit 1
+fi
 
 VERSION="$(printf '%s\n' "${MANIFEST}" | awk '/^version:/ {print $2; exit}')"
 
@@ -66,7 +69,10 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 TMP_BIN="${TMP_DIR}/bringupd"
 
 echo "Downloading ${BASE_URL}/${ARTIFACT_PATH} ..."
-curl -fsSL "${BASE_URL}/${ARTIFACT_PATH}" -o "${TMP_BIN}"
+if ! ERR_MSG="$(curl -fsSL "${BASE_URL}/${ARTIFACT_PATH}" -o "${TMP_BIN}" 2>&1)"; then
+    echo "Error: Failed to download daemon binary from ${BASE_URL}/${ARTIFACT_PATH}" >&2
+    exit 1
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
     ACTUAL_SHA="$(sha256sum "${TMP_BIN}" | awk '{print $1}')"
