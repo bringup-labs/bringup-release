@@ -10,7 +10,7 @@ set -euo pipefail
 # /usr/local/bin/bringupd, and registers it as a service (systemd / launchd).
 # Re-run to upgrade.
 
-BASE_URL="${BRINGUP_BASE_URL:-https://bringup.dev}"
+BASE_URL="${BRINGUP_BASE_URL:-https://storage.bringup.dev/bringup-releases}"
 MANIFEST_URL="${BRINGUP_MANIFEST_URL:-${BASE_URL}/daemon/manifest.yml}"
 INSTALL_PATH="/usr/local/bin/bringupd"
 
