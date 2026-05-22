@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      daemon_only:
+        description: 'Build only daemon'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -46,7 +51,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.26'
           cache-dependency-path: apps/bringup_desktop_app/lib/bringup-daemon/go.sum
@@ -108,14 +113,12 @@ jobs:
       # / afterAllArtifactBuild hooks, --publish never), then uploads the
       # stapled artifacts to S3. publish:linux builds + publishes each arch.
       - name: Build & publish
+        if: github.event.inputs.daemon_only != 'true'
         timeout-minutes: 45
         working-directory: apps/bringup_desktop_app
         shell: bash
         env:
           BRINGUP_ALLOW_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
-          # Verbose electron-builder logging — surfaces the exact pkg/sign
-          # command and pinpoints where a build stalls. Remove once stable.
-          DEBUG: electron-builder
           # CSC_NAME signs the .app and the daemon binary; CSC_INSTALLER_NAME
           # signs the .pkg. Both must match the certificate Common Names exactly.
           CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
@@ -128,8 +131,115 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
         run: npm run ${{ matrix.publish_cmd }}
 
+      # ── Standalone daemon publishing (mac) ──────────────────────────────────
+      - name: Build standalone daemon (mac)
+        if: matrix.platform == 'mac'
+        env:
+          CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
+          CSC_KEYCHAIN: "${{ runner.temp }}/build.keychain"
+        run: ./scripts/publish-daemon.sh darwin
+        working-directory: apps/bringup_desktop_app
+        shell: bash
+
+      - name: Upload standalone daemon (mac)
+        if: matrix.platform == 'mac'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp dist/daemon/ s3://bringup-releases/daemon/ \
+            --endpoint-url https://storage.bringup.dev \
+            --recursive \
+            --exclude "*" \
+            --include "bringupd-darwin-*"
+        working-directory: apps/bringup_desktop_app
+        shell: bash
+
+      - name: Upload daemon checksums artifact (mac)
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v7
+        with:
+          name: daemon-sha-mac
+          path: apps/bringup_desktop_app/dist/daemon/**/*.sha256
+
+      # ── Standalone daemon publishing (linux) ────────────────────────────────
+      - name: Build standalone daemon (linux)
+        if: matrix.platform == 'linux'
+        run: ./scripts/publish-daemon.sh linux
+        working-directory: apps/bringup_desktop_app
+        shell: bash
+
+      - name: Upload standalone daemon (linux)
+        if: matrix.platform == 'linux'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp dist/daemon/ s3://bringup-releases/daemon/ \
+            --endpoint-url https://storage.bringup.dev \
+            --recursive \
+            --exclude "*" \
+            --include "bringupd-linux-*"
+        working-directory: apps/bringup_desktop_app
+        shell: bash
+
+      - name: Upload daemon checksums artifact (linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: daemon-sha-linux
+          path: apps/bringup_desktop_app/dist/daemon/**/*.sha256
+
       # ── Cleanup ─────────────────────────────────────────────────────────────
       - name: Delete temporary keychain (macOS only)
         if: always() && matrix.platform == 'mac'
         run: |
           security delete-keychain "$RUNNER_TEMP/build.keychain" || true
+        working-directory: apps/bringup_desktop_app
+
+  # ── Combine per-platform daemon checksums into a single manifest ──────────────
+  publish-daemon-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Get daemon version
+        id: get-version
+        run: |
+          VERSION=$(cat apps/bringup_desktop_app/lib/bringup-daemon/VERSION)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download daemon checksum artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: daemon-sha-*
+          merge-multiple: true
+          path: apps/bringup_desktop_app/dist/daemon/${{ steps.get-version.outputs.version }}
+
+      - name: Generate manifest
+        run: ./scripts/gen-daemon-manifest.sh
+        working-directory: apps/bringup_desktop_app
+        shell: bash
+
+      - name: Publish manifest
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp dist/daemon/manifest.yml s3://bringup-releases/daemon/manifest.yml \
+            --endpoint-url https://storage.bringup.dev
+        working-directory: apps/bringup_desktop_app
+        shell: bash
