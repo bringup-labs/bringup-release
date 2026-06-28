@@ -129,6 +129,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          BRINGUP_SIGN_PRIVATE_KEY: ${{ secrets.BRINGUP_SIGN_PRIVATE_KEY }}
         run: npm run ${{ matrix.publish_cmd }}
 
       # ── Standalone daemon publishing (mac) ──────────────────────────────────
@@ -137,6 +138,7 @@ jobs:
         env:
           CSC_NAME: "Rahul Katiyar (F5YXN979Q6)"
           CSC_KEYCHAIN: "${{ runner.temp }}/build.keychain"
+          BRINGUP_SIGN_PRIVATE_KEY: ${{ secrets.BRINGUP_SIGN_PRIVATE_KEY }}
         run: ./scripts/publish-daemon.sh darwin
         working-directory: apps/bringup_desktop_app
         shell: bash
@@ -151,7 +153,8 @@ jobs:
             --endpoint-url https://storage.bringup.dev \
             --recursive \
             --exclude "*" \
-            --include "*bringupd-darwin-*"
+            --include "*bringupd-darwin-*" \
+            --include "*.sig"
         working-directory: apps/bringup_desktop_app
         shell: bash
 
@@ -165,6 +168,8 @@ jobs:
       # ── Standalone daemon publishing (linux) ────────────────────────────────
       - name: Build standalone daemon (linux)
         if: matrix.platform == 'linux'
+        env:
+          BRINGUP_SIGN_PRIVATE_KEY: ${{ secrets.BRINGUP_SIGN_PRIVATE_KEY }}
         run: ./scripts/publish-daemon.sh linux
         working-directory: apps/bringup_desktop_app
         shell: bash
@@ -187,7 +192,8 @@ jobs:
             --exclude "*" \
             --include "*bringupd-linux-*" \
             --include "*bringup-linux-*" \
-            --include "*bringupd.service*"
+            --include "*bringupd.service*" \
+            --include "*.sig"
         working-directory: apps/bringup_desktop_app
         shell: bash
 
